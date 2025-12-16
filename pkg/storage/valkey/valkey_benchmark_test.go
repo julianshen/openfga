@@ -3,6 +3,7 @@ package valkey_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/oklog/ulid/v2"
@@ -13,7 +14,10 @@ import (
 )
 
 func BenchmarkValkeyWrite(b *testing.B) {
-	uri := "redis://localhost:6380"
+	uri := os.Getenv("OPENFGA_VALKEY_URI")
+	if uri == "" {
+		uri = "redis://localhost:6380"
+	}
 	ds, err := valkey.New(uri)
 	if err != nil {
 		b.Skipf("Skipping benchmark: %v", err)
@@ -40,7 +44,10 @@ func BenchmarkValkeyWrite(b *testing.B) {
 }
 
 func BenchmarkValkeyReadUserTuple(b *testing.B) {
-	uri := "redis://localhost:6380"
+	uri := os.Getenv("OPENFGA_VALKEY_URI")
+	if uri == "" {
+		uri = "redis://localhost:6380"
+	}
 	ds, err := valkey.New(uri)
 	if err != nil {
 		b.Skipf("Skipping benchmark: %v", err)
