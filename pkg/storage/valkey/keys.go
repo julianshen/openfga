@@ -20,9 +20,9 @@ func storesSetKey() string {
 	return storePrefix
 }
 
-// storesByNameKey returns the key for the Set of store IDs with a given name
+// storesByNameKey returns the key for the Set of store IDs with a given name.
 func storesByNameKey(name string) string {
-	return fmt.Sprintf("stores:by_name:%s", name)
+	return "stores:by_name:" + name
 }
 
 func authorizationModelKey(storeID, modelID string) string {

@@ -2,18 +2,19 @@ package valkey
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
-	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"github.com/openfga/openfga/pkg/storage"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+
+	"github.com/openfga/openfga/pkg/storage"
 )
 
 type ChangelogEntry struct {
@@ -81,7 +82,7 @@ func (s *ValkeyBackend) ReadChanges(ctx context.Context, store string, filter st
 			// So we might get duplicates if multiple events happened at the same ms?
 			// This is a limitation if we don't store the ULID as the ID.
 			// If we just use the timestamp:
-			start = fmt.Sprintf("%d", u.Time())
+			start = strconv.FormatUint(u.Time(), 10)
 		} else {
 			// Try as Redis ID
 			start = options.Pagination.From
@@ -121,7 +122,7 @@ func (s *ValkeyBackend) ReadChanges(ctx context.Context, store string, filter st
 			maxID = "(" + options.Pagination.From
 		} else if filter.HorizonOffset > 0 {
 			cutoff := time.Now().Add(-filter.HorizonOffset)
-			maxID = fmt.Sprintf("%d", cutoff.UnixMilli())
+			maxID = strconv.FormatInt(cutoff.UnixMilli(), 10)
 		}
 
 		minID := "-"
@@ -144,7 +145,7 @@ func (s *ValkeyBackend) ReadChanges(ctx context.Context, store string, filter st
 		maxID := "+"
 		if filter.HorizonOffset > 0 {
 			cutoff := time.Now().Add(-filter.HorizonOffset)
-			maxID = fmt.Sprintf("%d", cutoff.UnixMilli())
+			maxID = strconv.FormatInt(cutoff.UnixMilli(), 10)
 		}
 
 		cmd := s.client.XRangeN(ctx, changelogKey(store), minID, maxID, count)
@@ -190,15 +191,23 @@ func (s *ValkeyBackend) processStreamResults(cmd *redis.XMessageSliceCmd, filter
 		opInt := 0
 		// Redis streams store values as strings
 		if opS, ok := msg.Values["op"].(string); ok {
-			fmt.Sscanf(opS, "%d", &opInt)
-		} else if opN, ok := msg.Values["op"].(int64); ok { // sometimes it might be int
+			if parsed, err := strconv.Atoi(opS); err == nil {
+				opInt = parsed
+			}
+		} else if opN, ok := msg.Values["op"].(int64); ok {
 			opInt = int(opN)
 		}
 
 		// Reconstruct TupleChange
 		// Timestamp from Msg ID
 		tsParts := strings.Split(msg.ID, "-")
-		tsMs, _ := strconv.ParseInt(tsParts[0], 10, 64)
+		if len(tsParts) == 0 {
+			continue
+		}
+		tsMs, err := strconv.ParseInt(tsParts[0], 10, 64)
+		if err != nil {
+			continue
+		}
 		ts := time.UnixMilli(tsMs)
 
 		changes = append(changes, &openfgav1.TupleChange{

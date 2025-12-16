@@ -2,24 +2,21 @@ package valkey
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
-	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"github.com/openfga/openfga/pkg/storage"
-	tupleUtils "github.com/openfga/openfga/pkg/tuple"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-)
 
-type TupleRecord struct {
-	ConditionName    string          `json:"condition_name,omitempty"`
-	ConditionContext json.RawMessage `json:"condition_context,omitempty"`
-}
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+
+	"github.com/openfga/openfga/pkg/storage"
+	tupleUtils "github.com/openfga/openfga/pkg/tuple"
+)
 
 func (s *ValkeyBackend) Read(ctx context.Context, store string, filter storage.ReadFilter, options storage.ReadOptions) (storage.TupleIterator, error) {
 	ctx, span := tracer.Start(ctx, "valkey.Read")
@@ -73,7 +70,9 @@ func (s *ValkeyBackend) ReadPage(ctx context.Context, store string, filter stora
 	cursor := uint64(0)
 	if options.Pagination.From != "" {
 		// Use From as cursor
-		fmt.Sscanf(options.Pagination.From, "%d", &cursor)
+		if parsed, err := strconv.ParseUint(options.Pagination.From, 10, 64); err == nil {
+			cursor = parsed
+		}
 	}
 
 	var tuples []*openfgav1.Tuple
@@ -81,7 +80,8 @@ func (s *ValkeyBackend) ReadPage(ctx context.Context, store string, filter stora
 	var err error
 	var keys []string
 
-	if filter.Object != "" && filter.Relation != "" {
+	switch {
+	case filter.Object != "" && filter.Relation != "":
 		// Scan users
 		var users []string
 		users, newCursor, err = s.client.SScan(ctx, indexObjectRelationKey(store, filter.Object, filter.Relation), cursor, "", count).Result()
@@ -94,7 +94,7 @@ func (s *ValkeyBackend) ReadPage(ctx context.Context, store string, filter stora
 			// If User provided, we wouldn't use SScan, we'd use ReadUserTuple. So User is empty here.
 			keys = append(keys, tupleKey(store, filter.Object, filter.Relation, u))
 		}
-	} else if filter.User != "" {
+	case filter.User != "":
 		// Scan object#relations
 		var objRels []string
 		objRels, newCursor, err = s.client.SScan(ctx, indexUserKey(store, filter.User), cursor, "", count).Result()
@@ -119,7 +119,7 @@ func (s *ValkeyBackend) ReadPage(ctx context.Context, store string, filter stora
 
 			keys = append(keys, tupleKey(store, object, relation, filter.User))
 		}
-	} else {
+	default:
 		// Full Scan of Key Space
 		// MATCH tuples:{store}:*
 		match := tupleKey(store, "*", "*", "*")
@@ -216,7 +216,7 @@ func (s *ValkeyBackend) ReadPage(ctx context.Context, store string, filter stora
 
 	contToken := ""
 	if newCursor != 0 {
-		contToken = fmt.Sprintf("%d", newCursor)
+		contToken = strconv.FormatUint(newCursor, 10)
 	}
 
 	return tuples, contToken, nil

@@ -5,12 +5,14 @@ import (
 	"strings"
 	"sync"
 
-	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"github.com/openfga/openfga/pkg/storage"
-	tupleUtils "github.com/openfga/openfga/pkg/tuple"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+
+	"github.com/openfga/openfga/pkg/storage"
+	tupleUtils "github.com/openfga/openfga/pkg/tuple"
 )
 
 type valkeyTupleIterator struct {
@@ -55,7 +57,7 @@ const (
 	scanBatchSize = 100 // default scan count
 )
 
-// NewTupleIterator: Scan users from index:obj_rel
+// NewTupleIterator scans users from index:obj_rel.
 func NewTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, object, relation, userFilter string, client *redis.Client) storage.TupleIterator {
 	return &valkeyTupleIterator{
 		client:   client,
@@ -67,7 +69,7 @@ func NewTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, object,
 	}
 }
 
-// NewReverseTupleIterator: Scan obj#rel from index:user
+// NewReverseTupleIterator scans obj#rel from index:user.
 func NewReverseTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, user, objectType, relation string, client *redis.Client) storage.TupleIterator {
 	return &valkeyTupleIterator{
 		client:         client,
@@ -80,7 +82,7 @@ func NewReverseTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, 
 	}
 }
 
-// NewUsersetTupleIterator: Scan users from index:obj_rel, filter usersets
+// NewUsersetTupleIterator scans users from index:obj_rel and filters usersets.
 func NewUsersetTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, object, relation string, allowedTypes []*openfgav1.RelationReference, client *redis.Client) storage.TupleIterator {
 	return &valkeyTupleIterator{
 		client:       client,
@@ -93,7 +95,7 @@ func NewUsersetTupleIterator(ctx context.Context, _ *redis.ScanIterator, store, 
 	}
 }
 
-// NewFullScanIterator: Scan keyspace for tuples
+// NewFullScanIterator scans keyspace for tuples.
 func NewFullScanIterator(ctx context.Context, store string, client *redis.Client) storage.TupleIterator {
 	return &valkeyTupleIterator{
 		client:       client,

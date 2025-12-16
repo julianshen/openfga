@@ -3,7 +3,7 @@ package valkey
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+
 	"github.com/openfga/openfga/pkg/storage"
 )
 
@@ -180,7 +181,9 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 
 	offset := int64(0)
 	if options.Pagination.From != "" {
-		fmt.Sscanf(options.Pagination.From, "%d", &offset)
+		if parsed, err := strconv.ParseInt(options.Pagination.From, 10, 64); err == nil {
+			offset = parsed
+		}
 	}
 	count := int64(storage.DefaultPageSize)
 	if options.Pagination.PageSize > 0 {
@@ -233,7 +236,7 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 
 	contToken := ""
 	if len(ids) == int(count) {
-		contToken = fmt.Sprintf("%d", offset+count)
+		contToken = strconv.FormatInt(offset+count, 10)
 	}
 	return stores, contToken, nil
 }
