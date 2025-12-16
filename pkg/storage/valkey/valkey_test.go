@@ -2,6 +2,7 @@ package valkey_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -12,7 +13,10 @@ import (
 )
 
 func TestValkeyDatastore(t *testing.T) {
-	uri := "redis://localhost:6380"
+	uri := os.Getenv("OPENFGA_VALKEY_URI")
+	if uri == "" {
+		uri = "redis://localhost:6380"
+	}
 
 	ds, err := valkey.New(uri)
 	require.NoError(t, err)
@@ -29,7 +33,10 @@ func TestValkeyDatastore(t *testing.T) {
 	}
 
 	// Flush DB before running tests
-	client := redis.NewClient(&redis.Options{Addr: "localhost:6380"})
+	// Parse URI to extract address
+	opt, err := redis.ParseURL(uri)
+	require.NoError(t, err)
+	client := redis.NewClient(opt)
 	require.NoError(t, client.FlushDB(context.Background()).Err())
 	client.Close()
 
