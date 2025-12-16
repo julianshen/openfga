@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func BenchmarkValkeyWrite(b *testing.B) {
@@ -111,16 +112,17 @@ func BenchmarkListStores_DeepPagination(b *testing.B) {
 	// Batch create stores using pipeline for speed
 	// We assume CreateStore implementation details here for speed.
 	// keys: store:{id}, stores:index, stores:by_name:{name}
-	pipe := client.Pipeline()
 	now := float64(time.Now().UnixNano()) // Simplified timestamp
+	nowTime := time.Now()
+	pipe := client.Pipeline()
 	for i := 0; i < 10000; i++ {
 		id := ulid.Make().String()
 		name := fmt.Sprintf("store-%d", i)
 		store := &openfgav1.Store{
 			Id:        id,
 			Name:      name,
-			CreatedAt: nil, // simplified
-			UpdatedAt: nil,
+			CreatedAt: timestamppb.New(nowTime),
+			UpdatedAt: timestamppb.New(nowTime),
 		}
 		bytes, _ := protojson.Marshal(store)
 

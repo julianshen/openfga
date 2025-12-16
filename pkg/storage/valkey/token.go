@@ -20,11 +20,12 @@ func encodeZSetCursor(score float64, member string) string {
 		// Should not happen for defined struct
 		return ""
 	}
-	return base64.StdEncoding.EncodeToString(bytes)
+	// Use RawStdEncoding to avoid padding
+	return base64.RawStdEncoding.EncodeToString(bytes)
 }
 
 func decodeZSetCursor(token string) (*zsetCursor, error) {
-	bytes, err := base64.StdEncoding.DecodeString(token)
+	bytes, err := base64.RawStdEncoding.DecodeString(token)
 	if err != nil {
 		return nil, err
 	}

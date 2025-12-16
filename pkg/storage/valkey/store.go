@@ -184,6 +184,11 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 	useRank := false
 	offset := int64(0)
 
+	pageSize := int64(storage.DefaultPageSize)
+	if options.Pagination.PageSize > 0 {
+		pageSize = int64(options.Pagination.PageSize)
+	}
+
 	if options.Pagination.From != "" {
 		if c, err := decodeZSetCursor(options.Pagination.From); err == nil {
 			currentCursor = c
@@ -210,7 +215,7 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 	// Query
 	if useRank {
 		// OFFSET based (Legacy)
-		ids, err = s.client.ZRange(ctx, key, offset, offset+int64(options.Pagination.PageSize)-1).Result()
+		ids, err = s.client.ZRange(ctx, key, offset, offset+pageSize-1).Result()
 	} else {
 		// CURSOR based (Optimized)
 		min := "-inf"
@@ -220,8 +225,8 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 		}
 
 		// Fetch a buffer to handle ties
-		limit := int64(options.Pagination.PageSize)
-		fetchCount := limit + 5 // buffer
+		// We fetch a bit more than PageSize to allow us to skip duplicates if any
+		fetchCount := pageSize + 5
 
 		zIds, err := s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
 			Key:     key,
@@ -233,7 +238,7 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 
 		if err == nil {
 			// Filter
-			count := 0
+			resultCount := 0
 			for _, z := range zIds {
 				member, _ := z.Member.(string)
 				score := z.Score
@@ -250,8 +255,8 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 				}
 
 				ids = append(ids, member)
-				count++
-				if count >= int(options.Pagination.PageSize) {
+				resultCount++
+				if resultCount >= int(pageSize) {
 					break
 				}
 			}
@@ -263,6 +268,7 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 	}
 
 	// Now fetch the stores
+	stores = make([]*openfgav1.Store, 0, len(ids)) // Preallocate
 	if len(ids) > 0 {
 		var keys []string
 		for _, id := range ids {
@@ -290,10 +296,21 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 
 	// Generate Token
 	contToken := ""
-	if len(stores) == int(options.Pagination.PageSize) {
+	if len(stores) == int(pageSize) {
 		lastStore := stores[len(stores)-1]
 		// Use Cursor token for next page
 		contToken = encodeZSetCursor(float64(lastStore.GetCreatedAt().AsTime().UnixNano()), lastStore.GetId())
+	} else if useRank && len(ids) == int(pageSize) {
+		// If we used Rank, and got a full page, but maybe filtering reduced it?
+		// No, MGet doesn't filter.
+		// Logic: If useRank, we return integer token for backward compat?
+		contToken = strconv.FormatInt(offset+pageSize, 10)
+	}
+	// Wait, the review said "If input was Offset... return Offset?".
+	// The previous implementation was forcing Cursor.
+	// If we want to return Offset when input was Offset:
+	if useRank && contToken != "" {
+		contToken = strconv.FormatInt(offset+pageSize, 10)
 	}
 
 	return stores, contToken, nil
