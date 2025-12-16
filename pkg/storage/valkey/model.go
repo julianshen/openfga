@@ -52,24 +52,94 @@ func (s *ValkeyBackend) ReadAuthorizationModels(ctx context.Context, store strin
 	ctx, span := tracer.Start(ctx, "valkey.ReadAuthorizationModels")
 	defer span.End()
 
+	// Pagination Logic
+	var currentCursor *zsetCursor
+	useRank := false
 	offset := int64(0)
-	if options.Pagination.From != "" {
-		o, err := strconv.ParseInt(options.Pagination.From, 10, 64)
-		if err != nil {
-			return nil, "", storage.ErrInvalidContinuationToken
-		}
-		offset = o
-	}
 
 	count := int64(storage.DefaultPageSize)
 	if options.Pagination.PageSize > 0 {
 		count = int64(options.Pagination.PageSize)
 	}
 
-	// We want descending order (Newest to Oldest)
-	// ZREVRANGE key start stop
-	// start = offset, stop = offset + count - 1
-	ids, err := s.client.ZRevRange(ctx, modelsIndexKey(store), offset, offset+count-1).Result()
+	if options.Pagination.From != "" {
+		if c, err := decodeZSetCursor(options.Pagination.From); err == nil {
+			currentCursor = c
+		} else {
+			// Fallback to offset (legacy behavior)
+			if parsed, err := strconv.ParseInt(options.Pagination.From, 10, 64); err == nil {
+				useRank = true
+				offset = parsed
+			} else {
+				return nil, "", storage.ErrInvalidContinuationToken
+			}
+		}
+	}
+
+	var ids []string
+	var err error
+
+	// Query
+	if useRank {
+		// ZREVRANGE key start stop (Rank based)
+		ids, err = s.client.ZRevRange(ctx, modelsIndexKey(store), offset, offset+count-1).Result()
+	} else {
+		// CURSOR based (Optimized)
+		// We want Descending order (Rev).
+		// Max score is determined by cursor (inclusive start point downwards).
+		max := "+inf"
+		if currentCursor != nil {
+			max = strconv.FormatFloat(currentCursor.Score, 'f', -1, 64)
+		}
+
+		limit := int64(options.Pagination.PageSize)
+		fetchCount := limit + 5
+
+		// ZRevRangeByScore logic using ZRangeArgs
+		zIds, err := s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
+			Key:     modelsIndexKey(store),
+			Start:   max,    // Max score (start of reverse scan)
+			Stop:    "-inf", // Min score
+			ByScore: true,
+			Rev:     true,
+			Count:   fetchCount,
+		}).Result()
+
+		if err == nil {
+			// Filter
+			scanCount := 0
+			for _, z := range zIds {
+				member, _ := z.Member.(string)
+				score := z.Score
+
+				if currentCursor != nil {
+					// We are scanning DOWN.
+					// If score > cursor.Score, we shouldn't see it due to Max constraint.
+					// If score == cursor.Score:
+					//   In Reverse scan, Redis sorts ties by Member DESC?
+					//   Standard ZRangeByScore (Asc): Score Asc, Member Asc.
+					//   ZRevRangeByScore (Desc): Score Desc, Member Desc.
+					//   So if we saw Member "B", next is "A".
+					//   So if Member >= cursor.Member ("B"), skip.
+					if score == currentCursor.Score {
+						if member >= currentCursor.Member {
+							continue // Already seen
+						}
+					}
+					// Note: If score > currentCursor.Score, wait, Max covers it?
+					// Wait, floating point comparison might be tricky around exact matches.
+					// We rely on stable float representation.
+				}
+
+				ids = append(ids, member)
+				scanCount++
+				if scanCount >= int(limit) {
+					break
+				}
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, "", err
 	}
@@ -99,15 +169,18 @@ func (s *ValkeyBackend) ReadAuthorizationModels(ctx context.Context, store strin
 		}
 		var m openfgav1.AuthorizationModel
 		if err := protojson.Unmarshal([]byte(sStr), &m); err != nil {
-			return nil, "", err
+			continue
 		}
 		models = append(models, &m)
 	}
 
 	contToken := ""
-	// If we got a full page, return next offset
-	if len(ids) == int(count) {
-		contToken = strconv.FormatInt(offset+count, 10)
+	// Generate Token from last item
+	if len(models) == int(count) {
+		lastModel := models[len(models)-1]
+		// Calculate score (ms timestamp from ID)
+		ulidID, _ := ulid.Parse(lastModel.GetId())
+		contToken = encodeZSetCursor(float64(ulidID.Time()), lastModel.GetId())
 	}
 
 	return models, contToken, nil

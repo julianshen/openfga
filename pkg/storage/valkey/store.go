@@ -179,29 +179,83 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 		return stores, "", nil
 	}
 
+	// Pagination Logic
+	var currentCursor *zsetCursor
+	useRank := false
 	offset := int64(0)
+
 	if options.Pagination.From != "" {
-		if parsed, err := strconv.ParseInt(options.Pagination.From, 10, 64); err == nil {
-			offset = parsed
+		if c, err := decodeZSetCursor(options.Pagination.From); err == nil {
+			currentCursor = c
+		} else {
+			// If not cursor, try Int (Legacy/Offset)
+			if parsed, err := strconv.ParseInt(options.Pagination.From, 10, 64); err == nil {
+				useRank = true
+				offset = parsed
+			} else {
+				return nil, "", storage.ErrInvalidContinuationToken
+			}
 		}
 	}
-	count := int64(storage.DefaultPageSize)
-	if options.Pagination.PageSize > 0 {
-		count = int64(options.Pagination.PageSize)
+
+	// Determine Key
+	key := storesIndexKey
+	if options.Name != "" {
+		key = storesByNameKey(options.Name)
 	}
 
 	var ids []string
 	var err error
 
-	// Case 2: Filter by Name
-	if options.Name != "" {
-		// ZRANGE on Name Index
-		ids, err = s.client.ZRange(ctx, storesByNameKey(options.Name), offset, offset+count-1).Result()
+	// Query
+	if useRank {
+		// OFFSET based (Legacy)
+		ids, err = s.client.ZRange(ctx, key, offset, offset+int64(options.Pagination.PageSize)-1).Result()
 	} else {
-		// Case 3: List all with Pagination (ZRANGE)
-		// We want Ascending order by creation time? Memory backend does slice[start:start+limit] which is insertion order.
-		// So ZRange (Ascending)
-		ids, err = s.client.ZRange(ctx, storesIndexKey, offset, offset+count-1).Result()
+		// CURSOR based (Optimized)
+		min := "-inf"
+		if currentCursor != nil {
+			// We use inclusive score. logic: score >= cursor.Score
+			min = strconv.FormatFloat(currentCursor.Score, 'f', -1, 64)
+		}
+
+		// Fetch a buffer to handle ties
+		limit := int64(options.Pagination.PageSize)
+		fetchCount := limit + 5 // buffer
+
+		zIds, err := s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
+			Key:     key,
+			Start:   min,
+			Stop:    "+inf",
+			ByScore: true,
+			Count:   fetchCount,
+		}).Result()
+
+		if err == nil {
+			// Filter
+			count := 0
+			for _, z := range zIds {
+				member, _ := z.Member.(string)
+				score := z.Score
+
+				if currentCursor != nil {
+					if score < currentCursor.Score {
+						continue // Should not happen with min=score
+					}
+					if score == currentCursor.Score {
+						if member <= currentCursor.Member {
+							continue // Already seen
+						}
+					}
+				}
+
+				ids = append(ids, member)
+				count++
+				if count >= int(options.Pagination.PageSize) {
+					break
+				}
+			}
+		}
 	}
 
 	if err != nil {
@@ -234,9 +288,18 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 		}
 	}
 
+	// Generate Token
 	contToken := ""
-	if len(ids) == int(count) {
-		contToken = strconv.FormatInt(offset+count, 10)
+	if len(stores) == int(options.Pagination.PageSize) {
+		lastStore := stores[len(stores)-1]
+		// Use Cursor token for next page
+		contToken = encodeZSetCursor(float64(lastStore.GetCreatedAt().AsTime().UnixNano()), lastStore.GetId())
 	}
+
 	return stores, contToken, nil
+}
+
+func isLikelyOffset(s string) bool {
+	_, err := strconv.ParseInt(s, 10, 64)
+	return err == nil
 }
