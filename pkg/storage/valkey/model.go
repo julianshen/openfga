@@ -92,11 +92,12 @@ func (s *ValkeyBackend) ReadAuthorizationModels(ctx context.Context, store strin
 			max = strconv.FormatFloat(currentCursor.Score, 'f', -1, 64)
 		}
 
-		limit := int64(options.Pagination.PageSize)
-		fetchCount := limit + 5
+		// Fetch extra items to handle ties at score boundaries
+		fetchCount := count + 5
 
 		// ZRevRangeByScore logic using ZRangeArgs
-		zIds, err := s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
+		var zIds []redis.Z
+		zIds, err = s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
 			Key:     modelsIndexKey(store),
 			Start:   max,    // Max score (start of reverse scan)
 			Stop:    "-inf", // Min score
@@ -104,38 +105,29 @@ func (s *ValkeyBackend) ReadAuthorizationModels(ctx context.Context, store strin
 			Rev:     true,
 			Count:   fetchCount,
 		}).Result()
+		if err != nil {
+			return nil, "", err
+		}
 
-		if err == nil {
-			// Filter
-			scanCount := 0
-			for _, z := range zIds {
-				member, _ := z.Member.(string)
-				score := z.Score
+		// Filter out already-seen items when resuming from cursor
+		scanCount := 0
+		for _, z := range zIds {
+			member, _ := z.Member.(string)
+			score := z.Score
 
-				if currentCursor != nil {
-					// We are scanning DOWN.
-					// If score > cursor.Score, we shouldn't see it due to Max constraint.
-					// If score == cursor.Score:
-					//   In Reverse scan, Redis sorts ties by Member DESC?
-					//   Standard ZRangeByScore (Asc): Score Asc, Member Asc.
-					//   ZRevRangeByScore (Desc): Score Desc, Member Desc.
-					//   So if we saw Member "B", next is "A".
-					//   So if Member >= cursor.Member ("B"), skip.
-					if score == currentCursor.Score {
-						if member >= currentCursor.Member {
-							continue // Already seen
-						}
-					}
-					// Note: If score > currentCursor.Score, wait, Max covers it?
-					// Wait, floating point comparison might be tricky around exact matches.
-					// We rely on stable float representation.
+			if currentCursor != nil {
+				// In reverse scan, Redis sorts ties by Member DESC.
+				// If we saw Member "B" at score X, next should be "A" or lower score.
+				// Skip if score == cursor.Score AND member >= cursor.Member
+				if score == currentCursor.Score && member >= currentCursor.Member {
+					continue // Already seen
 				}
+			}
 
-				ids = append(ids, member)
-				scanCount++
-				if scanCount >= int(limit) {
-					break
-				}
+			ids = append(ids, member)
+			scanCount++
+			if scanCount >= int(count) {
+				break
 			}
 		}
 	}

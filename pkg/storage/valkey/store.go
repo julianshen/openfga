@@ -224,41 +224,38 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 			min = strconv.FormatFloat(currentCursor.Score, 'f', -1, 64)
 		}
 
-		// Fetch a buffer to handle ties
-		// We fetch a bit more than PageSize to allow us to skip duplicates if any
+		// Fetch extra items to handle ties at score boundaries
 		fetchCount := pageSize + 5
 
-		zIds, err := s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
+		var zIds []redis.Z
+		zIds, err = s.client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
 			Key:     key,
 			Start:   min,
 			Stop:    "+inf",
 			ByScore: true,
 			Count:   fetchCount,
 		}).Result()
+		if err != nil {
+			return nil, "", err
+		}
 
-		if err == nil {
-			// Filter
-			resultCount := 0
-			for _, z := range zIds {
-				member, _ := z.Member.(string)
-				score := z.Score
+		// Filter out already-seen items when resuming from cursor
+		resultCount := 0
+		for _, z := range zIds {
+			member, _ := z.Member.(string)
+			score := z.Score
 
-				if currentCursor != nil {
-					if score < currentCursor.Score {
-						continue // Should not happen with min=score
-					}
-					if score == currentCursor.Score {
-						if member <= currentCursor.Member {
-							continue // Already seen
-						}
-					}
+			if currentCursor != nil {
+				// In ascending scan, skip items at same score with member <= cursor
+				if score == currentCursor.Score && member <= currentCursor.Member {
+					continue // Already seen
 				}
+			}
 
-				ids = append(ids, member)
-				resultCount++
-				if resultCount >= int(pageSize) {
-					break
-				}
+			ids = append(ids, member)
+			resultCount++
+			if resultCount >= int(pageSize) {
+				break
 			}
 		}
 	}
@@ -294,29 +291,18 @@ func (s *ValkeyBackend) ListStores(ctx context.Context, options storage.ListStor
 		}
 	}
 
-	// Generate Token
+	// Generate continuation token for next page
 	contToken := ""
 	if len(stores) == int(pageSize) {
-		lastStore := stores[len(stores)-1]
-		// Use Cursor token for next page
-		contToken = encodeZSetCursor(float64(lastStore.GetCreatedAt().AsTime().UnixNano()), lastStore.GetId())
-	} else if useRank && len(ids) == int(pageSize) {
-		// If we used Rank, and got a full page, but maybe filtering reduced it?
-		// No, MGet doesn't filter.
-		// Logic: If useRank, we return integer token for backward compat?
-		contToken = strconv.FormatInt(offset+pageSize, 10)
-	}
-	// Wait, the review said "If input was Offset... return Offset?".
-	// The previous implementation was forcing Cursor.
-	// If we want to return Offset when input was Offset:
-	if useRank && contToken != "" {
-		contToken = strconv.FormatInt(offset+pageSize, 10)
+		if useRank {
+			// Return offset-based token for backward compatibility
+			contToken = strconv.FormatInt(offset+pageSize, 10)
+		} else {
+			// Return cursor-based token for optimized pagination
+			lastStore := stores[len(stores)-1]
+			contToken = encodeZSetCursor(float64(lastStore.GetCreatedAt().AsTime().UnixNano()), lastStore.GetId())
+		}
 	}
 
 	return stores, contToken, nil
-}
-
-func isLikelyOffset(s string) bool {
-	_, err := strconv.ParseInt(s, 10, 64)
-	return err == nil
 }
