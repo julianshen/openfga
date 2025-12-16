@@ -73,6 +73,7 @@ import (
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 	"github.com/openfga/openfga/pkg/storage/sqlite"
+	"github.com/openfga/openfga/pkg/storage/valkey"
 	"github.com/openfga/openfga/pkg/telemetry"
 )
 
@@ -460,6 +461,15 @@ func (s *ServerContext) datastoreConfig(config *serverconfig.Config) (storage.Op
 		datastore, err = sqlite.New(config.Datastore.URI, dsCfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("initialize sqlite datastore: %w", err)
+		}
+	case "valkey":
+		opts := []valkey.ValkeyOption{
+			valkey.WithMaxTuplesPerWrite(config.MaxTuplesPerWrite),
+			valkey.WithMaxTypesPerAuthorizationModel(config.MaxTypesPerAuthorizationModel),
+		}
+		datastore, err = valkey.New(config.Datastore.URI, opts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("initialize valkey datastore: %w", err)
 		}
 	default:
 		return nil, nil, fmt.Errorf("storage engine '%s' is unsupported", config.Datastore.Engine)
