@@ -2,8 +2,11 @@ package valkey
 
 import (
 	"encoding/base64"
-	"encoding/json"
+
+	jsoniter "github.com/json-iterator/go"
 )
+
+var jsonIter = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type zsetCursor struct {
 	Score  float64 `json:"s"`
@@ -15,7 +18,7 @@ func encodeZSetCursor(score float64, member string) string {
 		Score:  score,
 		Member: member,
 	}
-	bytes, err := json.Marshal(cursor)
+	bytes, err := jsonIter.Marshal(cursor)
 	if err != nil {
 		// Should not happen for defined struct
 		return ""
@@ -30,7 +33,7 @@ func decodeZSetCursor(token string) (*zsetCursor, error) {
 		return nil, err
 	}
 	var cursor zsetCursor
-	if err := json.Unmarshal(bytes, &cursor); err != nil {
+	if err := jsonIter.Unmarshal(bytes, &cursor); err != nil {
 		return nil, err
 	}
 	return &cursor, nil
