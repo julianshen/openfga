@@ -16,10 +16,6 @@ func storeKey(id string) string {
 	return fmt.Sprintf("%s:%s", storePrefix, id)
 }
 
-func storesSetKey() string {
-	return storePrefix
-}
-
 // storesByNameKey returns the key for the Set of store IDs with a given name.
 func storesByNameKey(name string) string {
 	return "stores:by_name:" + name
@@ -56,10 +52,4 @@ func indexObjectRelationKey(storeID, object, relation string) string {
 // index:user:{store_id}:{user} -> Set of object#relation
 func indexUserKey(storeID, user string) string {
 	return fmt.Sprintf("index:user:%s:%s", storeID, user)
-}
-
-// index:userset:{store_id}:{object}:{relation} -> Set of user (generic)
-// This is to optimize ReadUsersetTuples
-func indexUsersetKey(storeID, object, relation string) string {
-	return fmt.Sprintf("index:userset:%s:%s:%s", storeID, object, relation)
 }

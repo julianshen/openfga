@@ -11,7 +11,7 @@ Try to keep listed changes to a concise bulleted list of simple explanations of 
 - Valkey storage backend support. [#1](https://github.com/julianshen/openfga/pull/1)
 
 ### Changed
-- Optimized Valkey pagination for `ListStores` and `ReadAuthorizationModels` using ZSet cursor-based pagination (O(log N) instead of O(N)). [#2](https://github.com/julianshen/openfga/pull/2)
+- Optimize Valkey `ListStores` deep pagination size and performance using cursor-based pagination and `json-iterator`. [#2](https://github.com/julianshen/openfga/pull/2), [#3](https://github.com/julianshen/openfga/pull/3)
 - Datastore throttling separated from dispatch throttling in BatchCheck, ListUsers metadata. Also, `throttling_type` label added to `throttledRequestCounter` metric to differentiate between dispatch/datastore throttling. [#2839](https://github.com/openfga/openfga/pull/2839)
 
 ## [1.11.2] - 2025-12-04

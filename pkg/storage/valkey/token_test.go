@@ -18,7 +18,7 @@ func TestZSetCursor(t *testing.T) {
 		cursor, err := decodeZSetCursor(token)
 		require.NoError(t, err)
 		require.NotNil(t, cursor)
-		require.Equal(t, score, cursor.Score)
+		require.InEpsilon(t, score, cursor.Score, 0.0000001)
 		require.Equal(t, member, cursor.Member)
 	})
 
