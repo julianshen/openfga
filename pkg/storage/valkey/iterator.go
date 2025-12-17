@@ -139,8 +139,6 @@ func (i *valkeyTupleIterator) fetchBatch(ctx context.Context) error {
 		// iterTypeNormal/Userset: keys are Users.
 		// iterTypeReverse: keys are Object#Relation.
 
-		var validCandidates []string
-
 		for _, k := range keys {
 			switch i.iterType {
 			case iterTypeFullScan:
@@ -149,7 +147,6 @@ func (i *valkeyTupleIterator) fetchBatch(ctx context.Context) error {
 			case iterTypeNormal:
 				// k is User
 				// If userFilter logic needed? (Read() usually handles exact user match separately)
-				validCandidates = append(validCandidates, k)
 				tupleKeys = append(tupleKeys, tupleKey(i.store, i.object, i.relation, k))
 
 			case iterTypeUserset:
@@ -175,7 +172,6 @@ func (i *valkeyTupleIterator) fetchBatch(ctx context.Context) error {
 					}
 				}
 
-				validCandidates = append(validCandidates, k)
 				tupleKeys = append(tupleKeys, tupleKey(i.store, i.object, i.relation, k))
 
 			case iterTypeReverse:
@@ -196,7 +192,6 @@ func (i *valkeyTupleIterator) fetchBatch(ctx context.Context) error {
 					continue
 				}
 
-				validCandidates = append(validCandidates, k) // we don't use this directly but useful for debug?
 				tupleKeys = append(tupleKeys, tupleKey(i.store, obj, rel, i.user))
 			}
 		}

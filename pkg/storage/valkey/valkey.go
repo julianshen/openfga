@@ -76,12 +76,12 @@ func (s *ValkeyBackend) IsReady(ctx context.Context) (storage.ReadinessStatus, e
 	return status, nil
 }
 
-// TupleBackend methods
+// TupleBackend methods.
 func (s *ValkeyBackend) MaxTuplesPerWrite() int {
 	return s.maxTuplesPerWrite
 }
 
-// AuthorizationModelBackend methods
+// AuthorizationModelBackend methods.
 func (s *ValkeyBackend) MaxTypesPerAuthorizationModel() int {
 	return s.maxTypesPerAuthorizationModel
 }

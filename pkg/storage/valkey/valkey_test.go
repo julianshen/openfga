@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openfga/openfga/pkg/storage/test"
-	"github.com/openfga/openfga/pkg/storage/valkey"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+
+	"github.com/openfga/openfga/pkg/storage/test"
+	"github.com/openfga/openfga/pkg/storage/valkey"
 )
 
 func TestValkeyDatastore(t *testing.T) {

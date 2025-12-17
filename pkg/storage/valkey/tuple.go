@@ -24,7 +24,7 @@ func (s *ValkeyBackend) Read(ctx context.Context, store string, filter storage.R
 
 	// 1. Full primary key
 	if filter.Object != "" && filter.Relation != "" && filter.User != "" {
-		t, err := s.ReadUserTuple(ctx, store, filter, storage.ReadUserTupleOptions{Consistency: options.Consistency})
+		t, err := s.ReadUserTuple(ctx, store, filter, storage.ReadUserTupleOptions(options))
 		if err != nil {
 			if err == storage.ErrNotFound {
 				return storage.NewStaticTupleIterator(nil), nil
