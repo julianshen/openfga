@@ -37,7 +37,7 @@ func (s *ValkeyBackend) LogChange(ctx context.Context, pipe redis.Pipeliner, sto
 	//     approximation by using the ULID timestamp to find the closest Redis ID, acknowledging
 	//     that intra-millisecond precision relative to the ULID is lost.
 
-	bytes, err := protojson.Marshal(change.TupleKey)
+	bytes, err := protojson.Marshal(change.GetTupleKey())
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *ValkeyBackend) LogChange(ctx context.Context, pipe redis.Pipeliner, sto
 	// We store minimal data.
 	values := map[string]interface{}{
 		"tk": string(bytes),
-		"op": int(change.Operation),
+		"op": int(change.GetOperation()),
 		// Store timestamp explicitly too, in case we need it?
 		// No, we can rely on Redis ID time, OR we should store the change timestamp if it was passed in.
 		// change.Timestamp
