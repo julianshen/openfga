@@ -1,5 +1,14 @@
 # OpenFGA Architecture Review: Scalability, Performance & Reimplementation Analysis
 
+> **Code References:** All code file and function references in this document are accurate as of:
+> - **Git Commit:** `e0a6d96f`
+> - **Date:** 2026-01-01
+> - **Branch:** `claude/rsfga-edge-design-nY8qo`
+>
+> Code may have changed since this analysis. Use references as guidance, not exact line numbers.
+
+---
+
 ## Executive Summary
 
 This document provides a comprehensive architecture review of OpenFGA, identifying bottlenecks, scalability challenges, and providing recommendations for refactoring, re-architecture, and potential Rust reimplementation.
@@ -8,8 +17,55 @@ This document provides a comprehensive architecture review of OpenFGA, identifyi
 - OpenFGA has a well-designed layered architecture with pluggable storage backends
 - Primary bottlenecks are in graph traversal algorithms, cache invalidation, and batch operation coordination
 - Horizontal scaling is limited by single-node graph resolution and synchronous cache invalidation
-- A Rust reimplementation could yield 2-5x performance improvements with proper design
+- A Rust reimplementation could **potentially** yield 2-5x performance improvements with proper design **based on preliminary analysis** (requires validation)
 - Storage backend choice significantly impacts performance characteristics at scale
+
+
+---
+
+## ⚠️ Performance Assumptions & Disclaimers
+
+**IMPORTANT:** All performance projections in this document are **estimates based on preliminary analysis**. They have NOT been validated through prototyping or benchmarking.
+
+### Assumptions
+
+These performance targets assume:
+
+1. **Hardware:** Edge nodes with 8GB+ RAM, modern CPUs (2020+)
+2. **Network:** <0.1ms latency between application and edge (localhost deployment)
+3. **Data Characteristics:**
+   - Authorization models are not pathologically deep (depth <10)
+   - Working set fits in edge memory (95%+ cache hit rate)
+   - Pre-computation keeps up with write rate
+4. **Workload:** Read-heavy (90%+ reads vs writes)
+5. **Implementation:** Optimal Rust code following best practices
+
+### Validation Plan
+
+**Phase 1 (Month 1-2):** Build prototype and benchmark
+- [ ] Validate 2-5x improvement claim
+- [ ] Measure actual P95/P99 latencies
+- [ ] Test with production-like data
+
+**Phase 2 (Month 3-4):** Load testing
+- [ ] Test under concurrent load
+- [ ] Measure GC pause elimination
+- [ ] Validate throughput claims
+
+**Success Criteria:**
+- ✅ P95 <1ms achieved in prototype
+- ✅ Throughput >100K checks/s per node
+- ✅ No degradation under load
+
+**If validation fails:** Reassess approach or abandon proposal
+
+### Comparable Systems
+
+Performance claims are informed by:
+- **Rust vs Go benchmarks:** https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+- **DashMap benchmarks:** Concurrent HashMap performance data
+- **Similar systems:** AWS Verified Permissions (Rust), Authzed (Go)
+
 
 ---
 
@@ -22,7 +78,8 @@ This document provides a comprehensive architecture review of OpenFGA, identifyi
 5. [Rust Reimplementation Suggestions](#5-rust-reimplementation-suggestions)
 6. [Storage Backend Considerations](#6-storage-backend-considerations)
 7. [Data Schema Recommendations](#7-data-schema-recommendations)
-8. [Implementation Roadmap](#8-implementation-roadmap)
+8. [Edge Server Architecture](#8-edge-server-architecture)
+9. [Implementation Roadmap](#9-implementation-roadmap)
 
 ---
 
@@ -115,7 +172,7 @@ This document provides a comprehensive architecture review of OpenFGA, identifyi
 
 #### 2.1.1 Synchronous Batch Wait
 
-**Location:** `pkg/server/commands/batch_check_command.go:234`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, synchronous wait)`
 
 ```go
 _ = pool.Wait()  // Blocks until ALL checks complete
@@ -134,7 +191,7 @@ _ = pool.Wait()  // Blocks until ALL checks complete
 
 #### 2.1.2 No Cross-Request Singleflight for Check Resolution
 
-**Location:** `internal/graph/cached_resolver.go`
+**Location:** `internal/graph/cached_resolver.go` (struct: `CachedCheckResolver`, method: `ResolveCheck`)
 
 **Problem:** Multiple concurrent requests checking identical permissions compute independently. Only the cache layer provides deduplication, but cache misses cause redundant computation.
 
@@ -149,7 +206,7 @@ _ = pool.Wait()  // Blocks until ALL checks complete
 
 #### 2.1.3 Cache Invalidation Latency
 
-**Location:** `internal/cachecontroller/cache_controller.go:207-260`
+**Location:** `internal/cachecontroller/cache_controller.go` (function: `findChangesAndInvalidateIfNecessary`)`
 
 ```go
 go func() {
@@ -176,7 +233,7 @@ go func() {
 
 #### 2.2.1 Per-Check Object Allocation
 
-**Location:** `pkg/server/commands/batch_check_command.go:188-199`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, per-check allocation)`
 
 **Problem:** New `CheckQuery` struct allocated per check in batch with multiple options applied.
 
@@ -188,7 +245,7 @@ go func() {
 
 #### 2.2.2 Graph Traversal Depth Limits
 
-**Location:** `pkg/server/config/config.go:22-23`
+**Location:** `pkg/server/config/config.go` (constants: `DefaultResolveNodeLimit`, `DefaultResolveNodeBreadthLimit`)`
 
 ```go
 DefaultResolveNodeLimit        = 25
@@ -205,7 +262,7 @@ DefaultResolveNodeBreadthLimit = 10
 
 #### 2.2.3 sync.Map Overhead in Result Collection
 
-**Location:** `pkg/server/commands/batch_check_command.go:168`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, sync.Map usage)
 
 **Problem:** `sync.Map` optimized for read-heavy workloads, but batch check is write-once-read-once.
 
@@ -217,7 +274,7 @@ DefaultResolveNodeBreadthLimit = 10
 
 #### 2.2.4 Contextual Tuple Serialization
 
-**Location:** `pkg/server/commands/batch_check_command.go:282-304`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `buildCacheKey`)`
 
 **Problem:** Large contextual tuple sets require expensive serialization for cache key generation.
 
@@ -231,9 +288,9 @@ DefaultResolveNodeBreadthLimit = 10
 
 | Bottleneck | Location | Impact |
 |------------|----------|--------|
-| Response cloning | `cached_resolver.go:176,208` | Minor allocation overhead |
-| Hash computation per check | `batch_check_command.go:150` | CPU overhead for deduplication |
-| Resolver chain construction | `batch_check.go:56-61` | Per-request overhead |
+| Response cloning | `internal/graph/cached_resolver.go` (method: `ResolveCheck`)` | Minor allocation overhead |
+| Hash computation per check | `batch_check_command.go` (function: `buildCacheKey`) | CPU overhead for deduplication |
+| Resolver chain construction | `batch_check.go` (function: `NewBatchCheckCommand`)` | Per-request overhead |
 
 ---
 
@@ -1014,9 +1071,592 @@ CREATE INDEX idx_tc_lookup
 
 ---
 
-## 8. Implementation Roadmap
+## 8. Edge Server Architecture
 
-### 8.1 Short-Term (1-3 months)
+For large-scale, globally distributed deployments, an edge server architecture provides significant benefits in latency, reliability, and scalability. This section outlines a comprehensive edge deployment strategy for OpenFGA.
+
+### 8.1 Why Edge Architecture?
+
+| Challenge | Central-Only | With Edge |
+|-----------|--------------|-----------|
+| Latency (global users) | 100-300ms | 5-20ms |
+| Single point of failure | Yes | No (degraded mode) |
+| Bandwidth costs | High | Reduced 60-80% |
+| Peak load handling | Limited | Distributed |
+| Offline operation | Impossible | Partial support |
+
+### 8.2 Edge Deployment Topologies
+
+#### 8.2.1 Three-Tier Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         EDGE TIER                                   │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐       │
+│  │ Edge    │ │ Edge    │ │ Edge    │ │ Edge    │ │ Edge    │       │
+│  │ Tokyo   │ │ Sydney  │ │ London  │ │ NYC     │ │ SaoPaulo│       │
+│  │         │ │         │ │         │ │         │ │         │       │
+│  │ • Cache │ │ • Cache │ │ • Cache │ │ • Cache │ │ • Cache │       │
+│  │ • Check │ │ • Check │ │ • Check │ │ • Check │ │ • Check │       │
+│  │ • Read  │ │ • Read  │ │ • Read  │ │ • Read  │ │ • Read  │       │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘       │
+└───────┼──────────┼──────────┼──────────┼──────────┼────────────────┘
+        │          │          │          │          │
+        └──────────┴────┬─────┴──────────┴──────────┘
+                        │
+┌───────────────────────▼─────────────────────────────────────────────┐
+│                       REGIONAL TIER                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │
+│  │  Region: APAC    │  │  Region: EMEA    │  │  Region: Americas│  │
+│  │                  │  │                  │  │                  │  │
+│  │  • Full Check    │  │  • Full Check    │  │  • Full Check    │  │
+│  │  • Read Replica  │  │  • Read Replica  │  │  • Read Replica  │  │
+│  │  • Write Queue   │  │  • Write Queue   │  │  • Write Queue   │  │
+│  │  • L2 Cache      │  │  • L2 Cache      │  │  • L2 Cache      │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘  │
+└───────────┼─────────────────────┼─────────────────────┼────────────┘
+            │                     │                     │
+            └─────────────────────┼─────────────────────┘
+                                  │
+┌─────────────────────────────────▼───────────────────────────────────┐
+│                       CENTRAL TIER                                  │
+│  ┌────────────────────────────────────────────────────────────────┐│
+│  │                    Primary Database Cluster                    ││
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         ││
+│  │  │   Primary    │  │   Replica    │  │   Replica    │         ││
+│  │  │   (Writes)   │  │   (Reads)    │  │   (Reads)    │         ││
+│  │  └──────────────┘  └──────────────┘  └──────────────┘         ││
+│  └────────────────────────────────────────────────────────────────┘│
+│  ┌────────────────────────────────────────────────────────────────┐│
+│  │              Global Coordination Services                      ││
+│  │  • Schema/Model Registry  • Invalidation Broadcast            ││
+│  │  • Conflict Resolution    • Metrics Aggregation               ││
+│  └────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### 8.2.2 Edge Node Responsibilities
+
+| Tier | Check | Read | Write | Cache | Graph Resolution |
+|------|-------|------|-------|-------|------------------|
+| Edge | ✓ (cached) | ✓ (cached) | Proxy | L1 | Simple only |
+| Regional | ✓ (full) | ✓ (replica) | Queue | L2 | Full |
+| Central | ✓ (full) | ✓ (primary) | ✓ | L3 | Full |
+
+### 8.3 Edge Server Components
+
+#### 8.3.1 Edge OpenFGA Instance
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Edge OpenFGA                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              API Gateway (gRPC/HTTP)            │   │
+│  │  • Rate limiting  • Request routing            │   │
+│  │  • Auth caching   • Circuit breaker            │   │
+│  └─────────────────────────────────────────────────┘   │
+│                          │                              │
+│  ┌───────────┐  ┌───────────────┐  ┌───────────────┐   │
+│  │ Check     │  │ Read          │  │ Write         │   │
+│  │ Handler   │  │ Handler       │  │ Proxy         │   │
+│  │           │  │               │  │               │   │
+│  │ • L1 Cache│  │ • Local store │  │ • Queue to    │   │
+│  │ • Simple  │  │ • Sync from   │  │   regional    │   │
+│  │   resolve │  │   regional    │  │ • Optimistic  │   │
+│  └─────┬─────┘  └───────┬───────┘  └───────┬───────┘   │
+│        │                │                  │           │
+│  ┌─────▼────────────────▼──────────────────▼───────┐   │
+│  │              Embedded Storage                   │   │
+│  │  ┌────────────┐  ┌────────────┐                │   │
+│  │  │ Check Cache│  │ Tuple      │                │   │
+│  │  │ (LRU+TTL)  │  │ Subset     │                │   │
+│  │  └────────────┘  └────────────┘                │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### 8.3.2 Embedded Storage Engine (Rust)
+
+For edge nodes, an embedded storage engine is essential:
+
+```rust
+use sled::{Db, Tree};
+use std::sync::Arc;
+
+pub struct EdgeStorage {
+    db: Db,
+    tuples: Tree,          // Hot tuples for this edge
+    check_cache: Tree,     // Cached check results
+    models: Tree,          // Authorization models
+    sync_state: Tree,      // Synchronization watermarks
+}
+
+impl EdgeStorage {
+    pub fn new(path: &str) -> Result<Self, Error> {
+        let db = sled::open(path)?;
+        Ok(Self {
+            tuples: db.open_tree("tuples")?,
+            check_cache: db.open_tree("check_cache")?,
+            models: db.open_tree("models")?,
+            sync_state: db.open_tree("sync_state")?,
+            db,
+        })
+    }
+
+    // Fast local check with fallback
+    pub async fn check_local(&self, req: &CheckRequest) -> CheckResult {
+        // 1. Check L1 cache
+        if let Some(cached) = self.check_cache.get(&req.cache_key())? {
+            return CheckResult::Cached(cached.into());
+        }
+
+        // 2. Try local resolution (simple cases only)
+        if let Some(result) = self.try_local_resolve(req).await? {
+            self.check_cache.insert(&req.cache_key(), result.to_bytes())?;
+            return CheckResult::Resolved(result);
+        }
+
+        // 3. Fallback to regional
+        CheckResult::NeedRegional
+    }
+
+    // Sync tuples from regional server
+    pub async fn sync_from_regional(
+        &self,
+        regional: &RegionalClient,
+        store_id: &str,
+    ) -> Result<SyncStats, Error> {
+        let watermark = self.get_sync_watermark(store_id)?;
+        let changes = regional.get_changes_since(store_id, watermark).await?;
+
+        for change in changes {
+            match change.operation {
+                Operation::Write => self.tuples.insert(&change.key, &change.value)?,
+                Operation::Delete => self.tuples.remove(&change.key)?,
+            }
+        }
+
+        self.set_sync_watermark(store_id, changes.last_ulid())?;
+        Ok(SyncStats { applied: changes.len() })
+    }
+}
+```
+
+### 8.4 Data Synchronization Strategies
+
+#### 8.4.1 Push vs Pull Synchronization
+
+| Strategy | Latency | Bandwidth | Complexity | Best For |
+|----------|---------|-----------|------------|----------|
+| Push (streaming) | Low | Higher | High | Critical permissions |
+| Pull (polling) | Medium | Lower | Low | Bulk data |
+| Hybrid | Optimal | Optimal | Medium | Production |
+
+#### 8.4.2 Selective Replication
+
+Not all tuples need to be at every edge. Implement intelligent replication:
+
+```rust
+pub struct ReplicationPolicy {
+    pub store_id: String,
+    pub rules: Vec<ReplicationRule>,
+}
+
+pub enum ReplicationRule {
+    // Replicate all tuples for specific object types
+    ObjectType { type_name: String, priority: Priority },
+
+    // Replicate based on access patterns (hot data)
+    AccessBased { min_access_count: u32, window: Duration },
+
+    // Replicate for specific users/regions
+    UserBased { user_patterns: Vec<String> },
+
+    // Always replicate (critical permissions)
+    Critical { object_pattern: String },
+}
+
+impl EdgeNode {
+    pub async fn should_replicate(&self, tuple: &Tuple) -> bool {
+        for rule in &self.policy.rules {
+            if rule.matches(tuple) {
+                return true;
+            }
+        }
+        false
+    }
+}
+```
+
+#### 8.4.3 Change Data Capture (CDC) Pipeline
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Central    │     │    Kafka/    │     │   Regional   │
+│   Database   │────▶│    Pulsar    │────▶│   Nodes      │
+│   (Writes)   │ CDC │   (Stream)   │     │              │
+└──────────────┘     └──────────────┘     └──────┬───────┘
+                                                 │
+                     ┌───────────────────────────┼───────┐
+                     │                           │       │
+               ┌─────▼─────┐              ┌─────▼─────┐  │
+               │   Edge    │              │   Edge    │  │
+               │   Tokyo   │              │   London  │  │
+               └───────────┘              └───────────┘  │
+                                                         │
+                                               ... more edges
+```
+
+### 8.5 Consistency Models
+
+#### 8.5.1 Consistency Levels
+
+| Level | Guarantee | Latency | Use Case |
+|-------|-----------|---------|----------|
+| Strong | Latest data | High (central) | Financial, compliance |
+| Bounded Staleness | Within X seconds | Medium | Most applications |
+| Eventual | Eventually consistent | Low (edge) | Read-heavy, non-critical |
+| Session | Read-your-writes | Low-Medium | User-facing operations |
+
+#### 8.5.2 Implementation
+
+```rust
+#[derive(Clone, Copy)]
+pub enum ConsistencyLevel {
+    Strong,
+    BoundedStaleness { max_staleness: Duration },
+    Eventual,
+    Session { session_id: SessionId },
+}
+
+impl EdgeCheckHandler {
+    pub async fn check(
+        &self,
+        req: CheckRequest,
+        consistency: ConsistencyLevel,
+    ) -> Result<CheckResponse, Error> {
+        match consistency {
+            ConsistencyLevel::Strong => {
+                // Always go to central/regional
+                self.regional_client.check(req).await
+            }
+
+            ConsistencyLevel::BoundedStaleness { max_staleness } => {
+                let local_age = self.get_data_age(&req.store_id)?;
+                if local_age < max_staleness {
+                    self.check_local(req).await
+                } else {
+                    self.regional_client.check(req).await
+                }
+            }
+
+            ConsistencyLevel::Eventual => {
+                // Try local first, fallback to regional
+                match self.check_local(req.clone()).await {
+                    CheckResult::Cached(r) | CheckResult::Resolved(r) => Ok(r),
+                    CheckResult::NeedRegional => {
+                        self.regional_client.check(req).await
+                    }
+                }
+            }
+
+            ConsistencyLevel::Session { session_id } => {
+                // Ensure read-your-writes within session
+                let session_watermark = self.get_session_watermark(session_id)?;
+                if self.local_watermark >= session_watermark {
+                    self.check_local(req).await
+                } else {
+                    self.regional_client.check(req).await
+                }
+            }
+        }
+    }
+}
+```
+
+### 8.6 Conflict Resolution
+
+For write conflicts (rare but possible with edge caching):
+
+#### 8.6.1 Last-Writer-Wins (LWW)
+
+```rust
+pub struct TimestampedTuple {
+    pub tuple: Tuple,
+    pub timestamp: HybridLogicalClock,
+    pub origin_node: NodeId,
+}
+
+impl ConflictResolver {
+    pub fn resolve_lww(a: &TimestampedTuple, b: &TimestampedTuple) -> &TimestampedTuple {
+        if a.timestamp > b.timestamp {
+            a
+        } else if b.timestamp > a.timestamp {
+            b
+        } else {
+            // Tie-breaker: higher node ID wins
+            if a.origin_node > b.origin_node { a } else { b }
+        }
+    }
+}
+```
+
+#### 8.6.2 Application-Level Resolution
+
+For complex cases, allow application-specific resolution:
+
+```rust
+pub trait ConflictHandler: Send + Sync {
+    fn resolve(&self, conflicts: Vec<TupleConflict>) -> Resolution;
+}
+
+pub enum Resolution {
+    KeepFirst,
+    KeepLast,
+    KeepBoth,  // Create both tuples
+    Merge(Tuple),  // Custom merged result
+    Reject,  // Reject the write
+}
+```
+
+### 8.7 Edge-Optimized Features
+
+#### 8.7.1 Negative Caching
+
+Cache "denied" results to avoid repeated lookups:
+
+```rust
+pub struct EdgeCache {
+    allowed: LruCache<CacheKey, (bool, Instant)>,
+    denied: LruCache<CacheKey, (Instant, DenialReason)>,
+}
+
+impl EdgeCache {
+    pub fn get(&self, key: &CacheKey) -> Option<CachedResult> {
+        // Check denied cache first (usually faster to reject)
+        if let Some((time, reason)) = self.denied.get(key) {
+            if time.elapsed() < self.denied_ttl {
+                return Some(CachedResult::Denied(*reason));
+            }
+        }
+
+        if let Some((allowed, time)) = self.allowed.get(key) {
+            if time.elapsed() < self.allowed_ttl {
+                return Some(CachedResult::Allowed(*allowed));
+            }
+        }
+
+        None
+    }
+}
+```
+
+#### 8.7.2 Prefetching
+
+Predictively load related permissions:
+
+```rust
+impl EdgeNode {
+    pub async fn check_with_prefetch(
+        &self,
+        req: CheckRequest,
+    ) -> Result<CheckResponse, Error> {
+        // Start the actual check
+        let check_future = self.check(req.clone());
+
+        // Prefetch related permissions in background
+        let prefetch_future = self.prefetch_related(&req);
+
+        let (result, _) = tokio::join!(check_future, prefetch_future);
+        result
+    }
+
+    async fn prefetch_related(&self, req: &CheckRequest) {
+        // Prefetch sibling relations
+        let relations = self.get_sibling_relations(&req.relation);
+        for rel in relations {
+            let prefetch_req = req.with_relation(rel);
+            let _ = self.check_local(prefetch_req).await;
+        }
+    }
+}
+```
+
+#### 8.7.3 Batch Optimization at Edge
+
+```rust
+impl EdgeBatchHandler {
+    pub async fn batch_check(
+        &self,
+        requests: Vec<CheckRequest>,
+    ) -> Vec<CheckResponse> {
+        // Partition into local-resolvable and needs-regional
+        let (local, regional): (Vec<_>, Vec<_>) = requests
+            .into_iter()
+            .partition(|r| self.can_resolve_locally(r));
+
+        // Process local in parallel
+        let local_results = futures::future::join_all(
+            local.iter().map(|r| self.check_local(r))
+        ).await;
+
+        // Batch regional requests (single round-trip)
+        let regional_results = if !regional.is_empty() {
+            self.regional_client.batch_check(regional).await?
+        } else {
+            vec![]
+        };
+
+        // Merge results maintaining order
+        self.merge_results(local_results, regional_results)
+    }
+}
+```
+
+### 8.8 Deployment Configurations
+
+#### 8.8.1 Kubernetes Edge Deployment
+
+```yaml
+# Edge DaemonSet - one per edge location
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: openfga-edge
+  labels:
+    app: openfga
+    tier: edge
+spec:
+  selector:
+    matchLabels:
+      app: openfga-edge
+  template:
+    spec:
+      nodeSelector:
+        node-type: edge
+      containers:
+      - name: openfga-edge
+        image: openfga/openfga-edge:latest
+        env:
+        - name: OPENFGA_MODE
+          value: "edge"
+        - name: OPENFGA_REGIONAL_ENDPOINT
+          value: "regional-openfga.internal:8081"
+        - name: OPENFGA_EDGE_STORAGE_PATH
+          value: "/data/openfga"
+        - name: OPENFGA_SYNC_INTERVAL
+          value: "5s"
+        - name: OPENFGA_CACHE_SIZE
+          value: "100000"
+        volumeMounts:
+        - name: edge-storage
+          mountPath: /data/openfga
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: edge-storage
+        hostPath:
+          path: /var/openfga
+          type: DirectoryOrCreate
+```
+
+#### 8.8.2 Edge Configuration Options
+
+```yaml
+# edge-config.yaml
+edge:
+  mode: "edge"  # edge | regional | central
+
+  # Upstream connection
+  regional:
+    endpoint: "regional.openfga.internal:8081"
+    timeout: 5s
+    retry:
+      attempts: 3
+      backoff: 100ms
+
+  # Local storage
+  storage:
+    engine: "embedded"  # embedded | sqlite
+    path: "/data/openfga"
+    cache_size_mb: 256
+
+  # Synchronization
+  sync:
+    interval: 5s
+    batch_size: 1000
+    strategies:
+      - type: "object_type"
+        types: ["document", "folder"]
+        priority: high
+      - type: "access_based"
+        min_accesses: 10
+        window: 1h
+
+  # Caching
+  cache:
+    check_cache:
+      size: 50000
+      ttl: 30s
+      negative_ttl: 10s
+    iterator_cache:
+      size: 10000
+      ttl: 60s
+
+  # Consistency
+  default_consistency: "bounded_staleness"
+  max_staleness: 10s
+
+  # Circuit breaker for regional failures
+  circuit_breaker:
+    failure_threshold: 5
+    timeout: 30s
+    half_open_requests: 3
+```
+
+### 8.9 Monitoring Edge Health
+
+```yaml
+# Prometheus metrics for edge nodes
+openfga_edge_cache_hit_ratio:
+  type: gauge
+  help: "Cache hit ratio at edge"
+
+openfga_edge_sync_lag_seconds:
+  type: gauge
+  help: "Seconds behind regional"
+
+openfga_edge_regional_latency_ms:
+  type: histogram
+  help: "Latency to regional server"
+
+openfga_edge_local_resolution_ratio:
+  type: gauge
+  help: "Percentage of checks resolved locally"
+
+openfga_edge_fallback_count:
+  type: counter
+  help: "Number of fallbacks to regional"
+```
+
+### 8.10 Edge Architecture Benefits Summary
+
+| Metric | Without Edge | With Edge | Improvement |
+|--------|--------------|-----------|-------------|
+| P50 Check Latency | 50ms | 5ms | 10x |
+| P99 Check Latency | 200ms | 30ms | 6.7x |
+| Central DB Load | 100% | 20-30% | 3-5x reduction |
+| Bandwidth Costs | 100% | 20-40% | 2.5-5x reduction |
+| Availability | 99.9% | 99.99% | 10x fewer outages |
+| Geographic Coverage | Limited | Global | Full coverage |
+
+---
+
+## 9. Implementation Roadmap
+
+### 9.1 Short-Term (1-3 months)
 
 | Priority | Task | Impact | Effort |
 |----------|------|--------|--------|
@@ -1026,7 +1666,7 @@ CREATE INDEX idx_tc_lookup
 | P1 | Replace sync.Map in batch check | Low | Low |
 | P2 | Add batch check metrics (deduplication ratio, slowest check) | Low | Low |
 
-### 8.2 Medium-Term (3-6 months)
+### 9.2 Medium-Term (3-6 months)
 
 | Priority | Task | Impact | Effort |
 |----------|------|--------|--------|
@@ -1036,36 +1676,47 @@ CREATE INDEX idx_tc_lookup
 | P2 | Materialized permission views (experimental) | Medium | High |
 | P2 | Schema optimization (indexes, partitioning) | Medium | Medium |
 
-### 8.3 Long-Term (6-12 months)
+### 9.3 Long-Term (6-12 months)
 
 | Priority | Task | Impact | Effort |
 |----------|------|--------|--------|
 | P0 | Rust core library (graph resolution) | High | High |
 | P1 | Distributed graph computation | High | Very High |
+| P1 | Edge server architecture implementation | High | Very High |
 | P1 | New storage backends (TiKV, CockroachDB) | Medium | High |
 | P2 | Full Rust reimplementation | High | Very High |
-| P2 | Edge deployment support (embedded engine) | Medium | High |
 
 ---
 
-## 9. Conclusion
+## 10. Conclusion
 
 OpenFGA is a well-architected authorization system with solid foundations. The identified bottlenecks are addressable through targeted refactoring:
 
 1. **Quick Wins**: Singleflight, object pooling, sync.Map replacement
 2. **Medium Effort**: Streaming results, distributed caching
-3. **Strategic Investment**: Rust reimplementation, distributed graph resolution
+3. **Strategic Investment**: Rust reimplementation, distributed graph resolution, edge architecture
 
 For very large deployments (100M+ tuples, 100K+ RPS), consider:
+- **Edge server architecture** for global distribution and low latency
 - Distributed graph computation
 - Purpose-built storage backend (TiKV/CockroachDB)
 - Materialized permission views
-- Multi-tier caching architecture
+- Multi-tier caching architecture (L1 edge → L2 regional → L3 central)
 
-A Rust reimplementation could provide 2-5x performance improvement while maintaining full API compatibility, making it an attractive option for organizations with extreme performance requirements.
+A Rust reimplementation combined with edge deployment could provide:
+- **10x latency improvement** (5ms vs 50ms for cached checks)
+- **3-5x throughput increase** at central tier
+- **99.99% availability** through edge redundancy
+- **Global coverage** with consistent low latency
+
+This architecture is particularly suitable for:
+- Multi-region SaaS applications
+- Gaming and real-time applications requiring sub-20ms authorization
+- IoT and edge computing scenarios
+- High-availability financial and healthcare systems
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Last Updated: 2025-12-31*
 *Author: Architecture Review*
