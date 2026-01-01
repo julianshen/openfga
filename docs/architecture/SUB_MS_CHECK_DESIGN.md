@@ -1,8 +1,26 @@
 # Sub-Millisecond Check Design: <1ms P95 Target
 
+---
+
+> ### 📊 Performance Claims Disclaimer
+>
+> This document contains **performance projections and targets** that are:
+> - ✅ Based on preliminary analysis and research
+> - ✅ Informed by similar systems and benchmarks
+> - ❌ NOT validated through prototyping
+> - ❌ NOT guaranteed to be achievable
+>
+> **All performance claims require validation** through the phased prototyping and testing approach described in the RFC.
+>
+> See RFC-001 Performance Assumptions section for full details.
+
+---
+
 ## Executive Summary
 
-**Goal**: Achieve <1ms P95 latency for Check operations at edge nodes.
+**Goal**: Achieve **target of <1ms P95 latency** for Check operations at edge nodes.
+
+**Status:** ⚠️ **Unvalidated Target** - Requires prototyping to confirm achievability
 
 **Key Insight**: To hit <1ms, we must eliminate:
 - Network hops (deploy edge in same namespace)

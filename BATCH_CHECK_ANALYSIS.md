@@ -18,7 +18,7 @@ Server.BatchCheck() [pkg/server/batch_check.go:25]
     ├─ Build check resolver chain
     └─ Execute BatchCheckCommand
           ↓
-BatchCheckQuery.Execute() [pkg/server/commands/batch_check_command.go:131]
+BatchCheckQuery.Execute() [pkg/server/commands/batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)]
     ├─ Deduplicate checks by cache key (xxhash)
     ├─ Execute unique checks in parallel via goroutine pool
     ├─ Each check → CheckQuery.Execute() → checkResolver.ResolveCheck()
@@ -43,7 +43,7 @@ BatchCheckQuery.Execute() [pkg/server/commands/batch_check_command.go:131]
 
 ### 1. **Synchronous Pool.Wait() Blocking** (High Impact)
 
-**Location:** `batch_check_command.go:234`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 ```go
 _ = pool.Wait()  // Blocks until ALL checks complete
@@ -60,7 +60,7 @@ _ = pool.Wait()  // Blocks until ALL checks complete
 
 ### 2. **Per-Check Object Allocation Overhead** (Medium Impact)
 
-**Location:** `batch_check_command.go:188-199`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 ```go
 pool.Go(func(ctx context.Context) error {
@@ -84,7 +84,7 @@ pool.Go(func(ctx context.Context) error {
 
 ### 3. **Deduplication Hash Computation** (Low-Medium Impact)
 
-**Location:** `batch_check_command.go:150-166`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 ```go
 for _, check := range params.Checks {
@@ -106,7 +106,7 @@ For batches with mostly unique checks, the deduplication overhead may exceed its
 
 ### 4. **sync.Map Overhead in Result Collection** (Low Impact)
 
-**Location:** `batch_check_command.go:168, 211, 240`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references), 211, 240`
 
 ```go
 var resultMap = new(sync.Map)
@@ -124,7 +124,7 @@ res, _ := resultMap.Load(cacheKey)
 
 ### 5. **Cache Invalidation Latency** (Medium Impact)
 
-**Location:** `cache_controller.go:207-226`
+**Location:** `cache_controller.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 ```go
 func (c *InMemoryCacheController) InvalidateIfNeeded(ctx context.Context, storeID string) {
@@ -141,7 +141,7 @@ func (c *InMemoryCacheController) InvalidateIfNeeded(ctx context.Context, storeI
 ```
 
 **Problem:**
-- Cache invalidation is async with 1-second timeout (`cache_controller.go:260`)
+- Cache invalidation is async with 1-second timeout (`cache_controller.go` (see ARCHITECTURE_REVIEW.md for function references)`)
 - Only one invalidation can run per store at a time
 - First check after a write may hit stale cache until invalidation completes
 - Under write-heavy workloads, changelog reads can bottleneck
@@ -152,7 +152,7 @@ func (c *InMemoryCacheController) InvalidateIfNeeded(ctx context.Context, storeI
 
 ### 6. **No Cross-Batch Check Deduplication** (Medium Impact)
 
-**Location:** `batch_check_command.go:150-166`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 **Problem:** Deduplication only occurs within a single batch request. Concurrent batch requests checking the same permissions don't share results.
 
@@ -166,7 +166,7 @@ func (c *InMemoryCacheController) InvalidateIfNeeded(ctx context.Context, storeI
 
 ### 7. **Unbounded Contextual Tuples Serialization** (Medium Impact)
 
-**Location:** `batch_check_command.go:282-304`
+**Location:** `batch_check_command.go` (see ARCHITECTURE_REVIEW.md for function references)`
 
 ```go
 func generateCacheKeyFromCheck(check *openfgav1.BatchCheckItem, ...) (CacheKey, error) {
@@ -189,7 +189,7 @@ func generateCacheKeyFromCheck(check *openfgav1.BatchCheckItem, ...) (CacheKey, 
 
 ### 8. **Response Cloning Overhead** (Low Impact)
 
-**Location:** `cached_resolver.go:176, 208`
+**Location:** `cached_resolver.go` (see ARCHITECTURE_REVIEW.md for function references) 208`
 
 ```go
 // Return a copy to avoid races across goroutines

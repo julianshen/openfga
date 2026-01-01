@@ -15,11 +15,11 @@ This document describes the design of **rsfga** (Rust FGA), a high-performance e
 
 | Goal | Target | Approach |
 |------|--------|----------|
-| Check latency P95 | <1ms | Pre-computed results + O(1) lookup |
-| Check latency P99 | <2ms | In-memory storage, no disk I/O |
-| Throughput per edge | 500K checks/s | Rust implementation, lock-free |
+| Check latency P95 | **Target: <1ms** | Pre-computed results + O(1) lookup |
+| Check latency P99 | **Target: <2ms** | In-memory storage, no disk I/O |
+| Throughput per edge | **Target: 500K checks/s** | Rust implementation, lock-free |
 | Memory per edge | 50MB - 2GB | Model-scoped, positive-only storage |
-| API compatibility | 100% | Same gRPC/HTTP API as OpenFGA |
+| API compatibility | **Goal: 100%** | Same gRPC/HTTP API as OpenFGA |
 
 ### 1.2 Non-Goals
 

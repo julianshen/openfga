@@ -1,5 +1,14 @@
 # OpenFGA Architecture Review: Scalability, Performance & Reimplementation Analysis
 
+> **Code References:** All code file and function references in this document are accurate as of:
+> - **Git Commit:** `e0a6d96f`
+> - **Date:** 2026-01-01
+> - **Branch:** `claude/rsfga-edge-design-nY8qo`
+>
+> Code may have changed since this analysis. Use references as guidance, not exact line numbers.
+
+---
+
 ## Executive Summary
 
 This document provides a comprehensive architecture review of OpenFGA, identifying bottlenecks, scalability challenges, and providing recommendations for refactoring, re-architecture, and potential Rust reimplementation.
@@ -8,8 +17,55 @@ This document provides a comprehensive architecture review of OpenFGA, identifyi
 - OpenFGA has a well-designed layered architecture with pluggable storage backends
 - Primary bottlenecks are in graph traversal algorithms, cache invalidation, and batch operation coordination
 - Horizontal scaling is limited by single-node graph resolution and synchronous cache invalidation
-- A Rust reimplementation could yield 2-5x performance improvements with proper design
+- A Rust reimplementation could **potentially** yield 2-5x performance improvements with proper design **based on preliminary analysis** (requires validation)
 - Storage backend choice significantly impacts performance characteristics at scale
+
+
+---
+
+## ⚠️ Performance Assumptions & Disclaimers
+
+**IMPORTANT:** All performance projections in this document are **estimates based on preliminary analysis**. They have NOT been validated through prototyping or benchmarking.
+
+### Assumptions
+
+These performance targets assume:
+
+1. **Hardware:** Edge nodes with 8GB+ RAM, modern CPUs (2020+)
+2. **Network:** <0.1ms latency between application and edge (localhost deployment)
+3. **Data Characteristics:**
+   - Authorization models are not pathologically deep (depth <10)
+   - Working set fits in edge memory (95%+ cache hit rate)
+   - Pre-computation keeps up with write rate
+4. **Workload:** Read-heavy (90%+ reads vs writes)
+5. **Implementation:** Optimal Rust code following best practices
+
+### Validation Plan
+
+**Phase 1 (Month 1-2):** Build prototype and benchmark
+- [ ] Validate 2-5x improvement claim
+- [ ] Measure actual P95/P99 latencies
+- [ ] Test with production-like data
+
+**Phase 2 (Month 3-4):** Load testing
+- [ ] Test under concurrent load
+- [ ] Measure GC pause elimination
+- [ ] Validate throughput claims
+
+**Success Criteria:**
+- ✅ P95 <1ms achieved in prototype
+- ✅ Throughput >100K checks/s per node
+- ✅ No degradation under load
+
+**If validation fails:** Reassess approach or abandon proposal
+
+### Comparable Systems
+
+Performance claims are informed by:
+- **Rust vs Go benchmarks:** https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+- **DashMap benchmarks:** Concurrent HashMap performance data
+- **Similar systems:** AWS Verified Permissions (Rust), Authzed (Go)
+
 
 ---
 
@@ -116,7 +172,7 @@ This document provides a comprehensive architecture review of OpenFGA, identifyi
 
 #### 2.1.1 Synchronous Batch Wait
 
-**Location:** `pkg/server/commands/batch_check_command.go:234`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, synchronous wait)`
 
 ```go
 _ = pool.Wait()  // Blocks until ALL checks complete
@@ -135,7 +191,7 @@ _ = pool.Wait()  // Blocks until ALL checks complete
 
 #### 2.1.2 No Cross-Request Singleflight for Check Resolution
 
-**Location:** `internal/graph/cached_resolver.go`
+**Location:** `internal/graph/cached_resolver.go` (struct: `CachedCheckResolver`, method: `ResolveCheck`)
 
 **Problem:** Multiple concurrent requests checking identical permissions compute independently. Only the cache layer provides deduplication, but cache misses cause redundant computation.
 
@@ -150,7 +206,7 @@ _ = pool.Wait()  // Blocks until ALL checks complete
 
 #### 2.1.3 Cache Invalidation Latency
 
-**Location:** `internal/cachecontroller/cache_controller.go:207-260`
+**Location:** `internal/cachecontroller/cache_controller.go` (function: `findChangesAndInvalidateIfNecessary`)`
 
 ```go
 go func() {
@@ -177,7 +233,7 @@ go func() {
 
 #### 2.2.1 Per-Check Object Allocation
 
-**Location:** `pkg/server/commands/batch_check_command.go:188-199`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, per-check allocation)`
 
 **Problem:** New `CheckQuery` struct allocated per check in batch with multiple options applied.
 
@@ -189,7 +245,7 @@ go func() {
 
 #### 2.2.2 Graph Traversal Depth Limits
 
-**Location:** `pkg/server/config/config.go:22-23`
+**Location:** `pkg/server/config/config.go` (constants: `DefaultResolveNodeLimit`, `DefaultResolveNodeBreadthLimit`)`
 
 ```go
 DefaultResolveNodeLimit        = 25
@@ -206,7 +262,7 @@ DefaultResolveNodeBreadthLimit = 10
 
 #### 2.2.3 sync.Map Overhead in Result Collection
 
-**Location:** `pkg/server/commands/batch_check_command.go:168`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `BatchCheckQuery.Execute`, sync.Map usage)
 
 **Problem:** `sync.Map` optimized for read-heavy workloads, but batch check is write-once-read-once.
 
@@ -218,7 +274,7 @@ DefaultResolveNodeBreadthLimit = 10
 
 #### 2.2.4 Contextual Tuple Serialization
 
-**Location:** `pkg/server/commands/batch_check_command.go:282-304`
+**Location:** `pkg/server/commands/batch_check_command.go` (function: `buildCacheKey`)`
 
 **Problem:** Large contextual tuple sets require expensive serialization for cache key generation.
 
@@ -232,9 +288,9 @@ DefaultResolveNodeBreadthLimit = 10
 
 | Bottleneck | Location | Impact |
 |------------|----------|--------|
-| Response cloning | `cached_resolver.go:176,208` | Minor allocation overhead |
-| Hash computation per check | `batch_check_command.go:150` | CPU overhead for deduplication |
-| Resolver chain construction | `batch_check.go:56-61` | Per-request overhead |
+| Response cloning | `internal/graph/cached_resolver.go` (method: `ResolveCheck`)` | Minor allocation overhead |
+| Hash computation per check | `batch_check_command.go` (function: `buildCacheKey`) | CPU overhead for deduplication |
+| Resolver chain construction | `batch_check.go` (function: `NewBatchCheckCommand`)` | Per-request overhead |
 
 ---
 

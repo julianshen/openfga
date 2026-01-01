@@ -1,5 +1,21 @@
 # Pre-Computation Engine: From Tuples to Check Results
 
+---
+
+> ### 📊 Performance Claims Disclaimer
+>
+> This document contains **performance projections and targets** that are:
+> - ✅ Based on preliminary analysis and research
+> - ✅ Informed by similar systems and benchmarks
+> - ❌ NOT validated through prototyping
+> - ❌ NOT guaranteed to be achievable
+>
+> **All performance claims require validation** through the phased prototyping and testing approach described in the RFC.
+>
+> See RFC-001 Performance Assumptions section for full details.
+
+---
+
 ## 1. The Core Problem
 
 When a tuple changes, we need to determine **all affected check results** and re-compute them.
